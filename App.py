@@ -8,7 +8,7 @@ import pandas as pd
 
 # --- 페이지 설정 ---
 st.set_page_config(
-    page_title="YouTube Insight DB Dashboard V6.2",
+    page_title="YouTube Insight DB Dashboard V6.3",
     page_icon="🚀",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -18,7 +18,6 @@ st.set_page_config(
 def get_gsheet_client():
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        # Streamlit Secrets에 등록된 gserviceaccount 자격 증명으로 구글 인증 획득
         credentials = Credentials.from_service_account_info(st.secrets["gserviceaccount"], scopes=scope)
         client = gspread.authorize(credentials)
         return client
@@ -32,19 +31,17 @@ def save_to_gsheet(data_list):
     if not client: return
     
     try:
-        # 지정된 SPREADSHEET_KEY 고유 ID를 통해 시트 접근
         sheet_key = st.secrets["SPREADSHEET_KEY"]
         spreadsheet = client.open_by_key(sheet_key)
-        worksheet = spreadsheet.get_worksheet(0) # 첫 번째 시트 메인 탭 선택
+        worksheet = spreadsheet.get_worksheet(0)
     except Exception as e:
         st.error(f"구글 시트를 열 수 없습니다. 키(ID) 설정을 확인하세요: {e}")
         return
 
-    # 중복 저장 방지를 위한 기존 영상 ID 추출
     existing_records = worksheet.get_all_records()
     existing_ids = {r["id"] for r in existing_records} if existing_records else set()
     
-    # 시트가 완전히 비어있을 경우 데이터 열 헤더(Header) 생성
+    # 시트가 완전히 비어있을 경우 데이터 열 헤더(Header) 자동 생성
     if not existing_records and len(worksheet.get_all_values()) == 0:
         headers = ["id", "title", "channelTitle", "publishedAt", "thumb", "viewCount", "subCount", "duration", "viralScore", "collectedAt"]
         worksheet.append_row(headers)
@@ -53,7 +50,7 @@ def save_to_gsheet(data_list):
     collected_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     
     for item in data_list:
-        if item["id"] not in existing_ids: # 중복 검사 통과한 신규 데이터만 배열 추가
+        if item["id"] not in existing_ids:
             new_rows.append([
                 item["id"], item["title"], item["channelTitle"], item["publishedAt"],
                 item["thumb"], item["viewCount"], item["subCount"], item["duration"],
@@ -62,7 +59,7 @@ def save_to_gsheet(data_list):
             
     if new_rows:
         worksheet.append_rows(new_rows)
-        st.success(f"📊 신규 데이터 {len(new_rows)}건이 구글 시트 DB에 성공적으로 저장되었습니다!")
+        st.success(f"📊 신규 데이터 {len(new_rows)}건이 구글 시트 DB에 저장되었습니다!")
     else:
         st.info("🔄 최신 데이터가 이미 DB에 모두 동기화되어 있습니다. (중복 없음)")
 
@@ -77,7 +74,7 @@ def load_from_gsheet():
     except Exception as e:
         return []
 
-# --- 헬퍼 함수: 시간 변환 (최대 3년 포맷 세팅) ---
+# --- 헬퍼 함수: 시간 변환 ---
 def get_published_after(option):
     if option == "전체": return None
     now = datetime.now(timezone.utc)
@@ -112,7 +109,7 @@ if "raw_data" not in st.session_state or not st.session_state.raw_data:
 # --- 사이드바 제어 패널 UI ---
 with st.sidebar:
     st.title("🚀 Insight DB Dash")
-    st.caption("Streamlit v6.2 (구글 시트 DB 자동 연동)")
+    st.caption("Streamlit v6.3 (수집 버튼 아래 배치)")
     st.markdown("---")
     
     # 통합 계정 자격 증명 연동 검증
@@ -122,17 +119,6 @@ with st.sidebar:
     else:
         st.error("⚠️ Secrets 환경 변수 세팅을 체크해 주세요.")
         
-    st.markdown("---")
-    st.subheader("📥 새로운 데이터 수집")
-    keyword = st.text_input("🔍 키워드 검색", placeholder="검색어 입력")
-    date_option = st.selectbox("📅 수집 기간 선택", ["최근 3일", "최근 1주일", "최근 1달", "최근 3개월", "최근 6개월", "최근 1년", "최근 2년", "최근 3년", "전체"], index=5)
-    
-    region_dict = {"🌐 전체 국가": "", "🇰🇷 한국 (KR)": "KR", "🇺🇸 미국 (US)": "US", "🇯🇵 일본 (JP)": "JP"}
-    region_label = st.selectbox("🌍 대상 국가 타겟", list(region_dict.keys()), index=1)
-    region_code = region_dict[region_label]
-
-    search_triggered = st.button("🚀 신규 데이터 수집 및 DB 저장", use_container_width=True)
-    
     st.markdown("---")
     st.subheader("📊 DB 실시간 정밀 필터")
     
@@ -147,6 +133,19 @@ with st.sidebar:
     with col_v2: max_view = st.number_input("최대 조회수 (0: 무제한)", min_value=0, value=0, step=10000)
     
     media_type = st.radio("⏱️ 영상 형태 필터링", ["전체", "숏폼", "롱폼"], horizontal=True)
+
+    st.markdown("---")
+    st.subheader("📥 새로운 데이터 수집")
+    keyword = st.text_input("🔍 키워드 검색", placeholder="검색어 입력")
+    date_option = st.selectbox("📅 수집 기간 선택", ["최근 3일", "최근 1주일", "최근 1달", "최근 3개월", "최근 6개월", "최근 1년", "최근 2년", "최근 3년", "전체"], index=5)
+    
+    region_dict = {"🌐 전체 국가": "", "🇰🇷 한국 (KR)": "KR", "🇺🇸 미국 (US)": "US", "🇯🇵 일본 (JP)": "JP"}
+    region_label = st.selectbox("🌍 대상 국가 타겟", list(region_dict.keys()), index=1)
+    region_code = region_dict[region_label]
+
+    st.markdown(" ")
+    # [복구 및 이동] 새로운 데이터 수집 버튼이 맨 아래로 정렬되었습니다.
+    search_triggered = st.button("🚀 신규 데이터 수집 및 DB 저장", use_container_width=True)
 
 
 # --- API 통신 및 데이터 스크래핑/적재 파트 ---
@@ -185,7 +184,6 @@ if search_triggered:
                             "viewCount": views, "subCount": subs, "duration": duration_sec, "viralScore": (views / subs) * 100
                         })
                     
-                    # 구글 시트 DB에 수집한 정보 저장 및 세션 데이터 강제 리로드
                     save_to_gsheet(fetched_list)
                     st.session_state.raw_data = load_from_gsheet()
                 else:
@@ -201,11 +199,11 @@ if st.button("🔄 구글 시트 DB 동기화/새로고침"):
 
 filtered_data = st.session_state.raw_data
 
-if filtered_data:
-    # 연산 편의를 위해 데이터프레임으로 핸들링
+# [1번 추가요청 사항 반영] 데이터 유효성 및 구조 교차 검증 (KeyError 완벽 방어)
+if filtered_data and isinstance(filtered_data, list) and "publishedAt" in filtered_data[0]:
     df = pd.DataFrame(filtered_data)
     
-    # 1. [정밀 날짜 필터링] 문자열 형태의 시각 데이터를 날짜 객체로 변환 후 유저 인터페이스 범위 필터링
+    # 1. [정밀 날짜 필터링]
     df['pub_date'] = pd.to_datetime(df['publishedAt']).dt.date
     df = df[(df['pub_date'] >= start_date) & (df['pub_date'] <= end_date)]
     
@@ -219,7 +217,6 @@ if filtered_data:
     elif media_type == "롱폼":
         df = df[df['duration'] >= 60]
 
-    # 화면 상단 통계 수치 및 정렬 라디오 버튼 바 구성
     col_count, col_sort = st.columns([2, 3])
     with col_sort:
         sort_by = st.radio("정렬 필터", ["조회수 순", "🔥 떡상 성과순", "최신순"], horizontal=True)
@@ -255,4 +252,5 @@ if filtered_data:
                 with stat_col1: st.metric(label="조회수", value=format_num(row['viewCount']))
                 with stat_col2: st.metric(label="구독자", value=format_num(row['subCount']))
 else:
-    st.info("📥 구글 시트 DB가 연결 전이거나 데이터가 비어 있습니다. 왼쪽 사이드바에서 신규 키워드 데이터를 먼저 수집하세요.")
+    # 데이터가 비어있을 경우 KeyError 대신 띄워줄 안내 메시지
+    st.info("📥 구글 시트 DB가 비어 있거나 헤더 세팅 전입니다. 왼쪽 사이드바 하단에서 키워드를 입력해 첫 데이터를 수집해 주세요.")

@@ -2,13 +2,13 @@ import streamlit as st
 from googleapiclient.discovery import build
 import gspread
 from google.oauth2.service_account import Credentials
-from datetime import datetime, timedelta, timezone, date
+from datetime import datetime, timedelta, timezone
 import isodate
 import pandas as pd
 
 # --- 페이지 설정 ---
 st.set_page_config(
-    page_title="YouTube Insight DB Dashboard V6.7",
+    page_title="YouTube Insight DB Dashboard V6.8",
     page_icon="🚀",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -153,7 +153,7 @@ if "raw_data" not in st.session_state or not st.session_state.raw_data:
 # --- 사이드바 제어 패널 UI ---
 with st.sidebar:
     st.title("🚀 Insight DB Dash")
-    st.caption("Streamlit v6.7 (UI 고도화 버전)")
+    st.caption("Streamlit v6.8 (달력 필터 제거)")
     st.markdown("---")
     
     api_key = st.secrets.get("YOUTUBE_API_KEY", "")
@@ -165,11 +165,7 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("📊 DB 실시간 정밀 필터")
     
-    today = date.today()
-    start_date = st.date_input("📅 업로드 시작일", today - timedelta(days=365))
-    end_date = st.date_input("📅 업로드 종료일", today)
-    
-    # [1번 요구사항 반영] 최대 조회수 필터 제거 및 기존 필터 슬림화
+    # [요구사항 반영] 불필요한 업로드 시작일/종료일 달력 컴포넌트 전면 제거 완료
     min_view = st.number_input("📉 최소 조회수 (0: 제한없음)", min_value=0, value=0, step=1000)
     min_sub = st.number_input("👤 최소 구독자수 (0: 제한없음)", min_value=0, value=0, step=1000)
     
@@ -179,7 +175,6 @@ with st.sidebar:
     st.subheader("📥 새로운 데이터 수집")
     keyword = st.text_input("🔍 키워드 검색", placeholder="검색어 입력 (필수)")
     
-    # [3번 요구사항 반영] 수집 기간 선택 UI를 가로형 라디오 버튼 레이아웃으로 변경하여 시인성 확보
     st.markdown("**📅 수집 기간 선택**")
     duration_options = ["1일", "3일", "15일", "1달", "3개월", "6개월", "1년", "2년", "3년", "4년", "5년"]
     date_option = st.radio("수집 기간 선택", duration_options, index=5, label_visibility="collapsed")
@@ -239,7 +234,6 @@ if search_triggered:
 # --- 메인 뷰 대시보드 데이터 연산 및 렌더링 파트 ---
 st.title("📺 YouTube DB Insight Dashboard")
 
-# [2번 요구사항 반영] 빠졌던 구글 시트 DB 동기화/새로고침(분석 단추) 전면 복구 완료
 if st.button("🔄 구글 시트 DB 동기화 / 데이터 정밀 분석"):
     st.session_state.raw_data = load_from_gsheet()
 
@@ -250,11 +244,10 @@ is_db_active = False
 if filtered_data and isinstance(filtered_data, list) and "publishedAt" in filtered_data[0]:
     df = pd.DataFrame(filtered_data)
     
-    # 1. 날짜 필터링
+    # 가독성을 위해 날짜 문자열을 데이트 타입으로 변환하여 칼럼 세팅
     df['pub_date'] = pd.to_datetime(df['publishedAt']).dt.date
-    df = df[(df['pub_date'] >= start_date) & (df['pub_date'] <= end_date)]
     
-    # 2. 최소 조회수 & 최소 구독자 정밀 필터링
+    # 최소 조회수 & 최소 구독자 정밀 필터링
     df = df[df['viewCount'] >= min_view]
     df = df[df['subCount'] >= min_sub]
         

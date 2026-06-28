@@ -1,335 +1,132 @@
 import streamlit as st
-from googleapiclient.discovery import build
+import pandas as pd
+import requests
+import isodate
 import gspread
 from google.oauth2.service_account import Credentials
-from datetime import datetime, timedelta, timezone
-import isodate
-import pandas as pd
+from datetime import datetime, timezone
 
-# --- 페이지 설정 ---
-st.set_page_config(
-    page_title="YouTube Insight DB Dashboard V6.8",
-    page_icon="🚀",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="Pixeling Master DB v2", page_icon="🌙", layout="wide")
 
-# --- 구글 시트(DB) 연결 함수 ---
-def get_gsheet_client():
+st.markdown("""<style>
+    .stApp { background-color: #0B0F19 !important; color: #E5E7EB; }
+    .brand-title { font-size: 24pt; font-weight: 800; background: linear-gradient(135deg, #FF0055, #4FACFE); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .url-wrapper { background: #161D30; border-radius: 8px; padding: 10px; border: 1px solid #24314D; color: #34D399; font-family: monospace; font-size: 9pt; margin-bottom: 15px; }
+    .mvp-hero-card { background: linear-gradient(135deg, #1A1225, #131B2E); border-radius: 12px; padding: 20px; margin-bottom: 20px; border: 1px solid #FF3366; }
+    .grid-card { background: #131B2E; border-radius: 10px; border: 1px solid #212B41; padding: 15px; margin-bottom: 20px; height: auto; }
+    .metric-box { background: #1A2338; border-radius: 6px; padding: 8px; margin-top: 5px; border: 1px solid #24314D; font-size: 9pt; }
+    .thumb-link img { transition: transform 0.2s ease, opacity 0.2s ease; }
+    .thumb-link img:hover { transform: scale(1.02); opacity: 0.85; cursor: pointer; }
+</style>""", unsafe_allow_html=True)
+
+st.markdown('<div class="brand-title">Pixeling Cloud Sheets DB v2 👑</div><div style="color:#9CA3AF;font-size:9pt;">YouTube Category Multi-Scaler & Tracking Engine</div><br>', unsafe_allow_html=True)
+
+# 🔐 API 자격 증명 로드룸 (구글 시트 API 할당량 초과 방지 캐싱 세션 적용)
+@st.cache_resource(ttl=3600)
+def get_google_worksheet(spreadsheet_key, sa_info):
+    gcp_info = {
+        "type": sa_info["type"], "project_id": sa_info["project_id"], "private_key_id": sa_info["private_key_id"],
+        "private_key": sa_info["private_key"].replace('\\n', '\n'), "client_email": sa_info["client_email"],
+        "client_id": sa_info["client_id"], "auth_uri": sa_info["auth_uri"], "token_uri": sa_info["token_uri"],
+        "auth_provider_x509_cert_url": sa_info["auth_provider_x509_cert_url"], "client_x509_cert_url": sa_info["client_x509_cert_url"]
+    }
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = Credentials.from_service_account_info(gcp_info, scopes=scope)
+    gc = gspread.authorize(creds)
+    sh = gc.open_by_key(spreadsheet_key)
+    return sh.get_worksheet(0)
+
+try:
+    API_KEY = st.secrets["YOUTUBE_API_KEY"]
+    SPREADSHEET_KEY = st.secrets["SPREADSHEET_KEY"]
+    
+    # 캐시 래핑 처리된 시트 로드
+    worksheet = get_google_worksheet(SPREADSHEET_KEY, st.secrets["gcp_service_account"])
+except Exception as e:
+    st.error(f"🚨 자격 증명 파싱 실패. 에러 파트: {e}")
+    st.stop()
+
+# 🗄️ 구글 시트 백업 엔진
+def save_data_to_google_sheet(df, period_txt, category_txt):
     try:
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        credentials = Credentials.from_service_account_info(st.secrets["gserviceaccount"], scopes=scope)
-        client = gspread.authorize(credentials)
-        return client
-    except Exception as e:
-        st.error(f"구글 시트 인증 실패: {e}")
-        return None
-
-# --- 구글 시트에 데이터 누적 저장하는 함수 ---
-def save_to_gsheet(data_list):
-    client = get_gsheet_client()
-    if not client: return
-    
-    try:
-        sheet_key = st.secrets["SPREADSHEET_KEY"]
-        spreadsheet = client.open_by_key(sheet_key)
-        worksheet = spreadsheet.get_worksheet(0)
-    except Exception as e:
-        st.error(f"구글 시트를 열 수 없습니다. 키(ID) 설정을 확인하세요: {e}")
-        return
-
-    existing_records = worksheet.get_all_records()
-    existing_ids = {r["id"] for r in existing_records} if existing_records else set()
-    
-    if not existing_records and len(worksheet.get_all_values()) == 0:
-        headers = ["id", "title", "channelTitle", "publishedAt", "thumb", "viewCount", "subCount", "duration", "viralScore", "collectedAt"]
-        worksheet.append_row(headers)
-
-    new_rows = []
-    collected_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    
-    for item in data_list:
-        if item["id"] not in existing_ids:
-            new_rows.append([
-                item["id"], item["title"], item["channelTitle"], item["publishedAt"],
-                item["thumb"], item["viewCount"], item["subCount"], item["duration"],
-                item["viralScore"], collected_at
+        current_log_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        if len(worksheet.get_all_values()) == 0:
+            worksheet.append_row(["Log_Time", "Target_Category", "Target_Period", "Video_URL", "Channel_Name", "Handle", "Format", "Likes", "Comments", "Calculated_Score", "Estimated_Revenue"])
+        
+        rows_to_append = []
+        for _, row in df.iterrows():
+            rows_to_append.append([
+                current_log_time, category_txt, period_txt, row["video_url"], row["name"], row["handle"], 
+                row["type"], row["likes"], row["comments"], row["score"], row["rev"]
             ])
-            
-    if new_rows:
-        worksheet.append_rows(new_rows)
-        st.success(f"📊 신규 데이터 {len(new_rows)}건이 구글 시트 DB에 저장되었습니다!")
-    else:
-        st.info("🔄 최신 데이터가 이미 DB에 모두 동기화되어 있습니다. (중복 없음)")
-
-# --- 구글 시트에서 전체 DB 불러오는 함수 ---
-def load_from_gsheet():
-    client = get_gsheet_client()
-    if not client: return []
-    try:
-        sheet_key = st.secrets["SPREADSHEET_KEY"]
-        worksheet = client.open_by_key(sheet_key).get_worksheet(0)
-        return worksheet.get_all_records()
+        worksheet.append_rows(rows_to_append)
+        return True
     except Exception as e:
-        return []
+        st.sidebar.error(f"시트 백업 실패: {e}")
+        return False
 
-# --- 유튜브 원본 API에서 직접 조회수 높은 20개 가져오는 백업 함수 ---
-def fetch_top_20_live(api_key, query_keyword, region):
-    if not query_keyword:
-        return []
-    try:
-        youtube = build("youtube", "v3", developerKey=api_key)
-        search_kwargs = {
-            "part": "snippet",
-            "q": query_keyword,
-            "type": "video",
-            "order": "viewCount",
-            "maxResults": 20
-        }
-        if region: search_kwargs["regionCode"] = region
-        
-        search_res = youtube.search().list(**search_kwargs).execute()
-        video_ids = [item["id"]["videoId"] for item in search_res.get("items", [])]
-        
-        if not video_ids: return []
-        
-        video_res = youtube.videos().list(part="statistics,snippet,contentDetails", id=",".join(video_ids)).execute()
-        channel_ids = list(set([item["snippet"]["channelId"] for item in video_res.get("items", [])]))
-        channel_res = youtube.channels().list(part="statistics", id=",".join(channel_ids)).execute()
-        channel_map = {c["id"]: int(c["statistics"].get("subscriberCount", 1)) for c in channel_res.get("items", [])}
-        
-        backup_list = []
-        for item in video_res.get("items", []):
-            views = int(item["statistics"].get("viewCount", 0))
-            subs = channel_map.get(item["snippet"]["channelId"], 1) or 1
-            iso_duration = item["contentDetails"].get("duration", "PT0S")
-            duration_sec = int(isodate.parse_duration(iso_duration).total_seconds())
-            
-            backup_list.append({
-                "id": item["id"], "title": item["snippet"]["title"], "channelTitle": item["snippet"]["channelTitle"],
-                "publishedAt": item["snippet"]["publishedAt"], "thumb": item["snippet"]["thumbnails"]["high"]["url"],
-                "viewCount": views, "subCount": subs, "duration": duration_sec, "viralScore": (views / subs) * 100
-            })
-        return backup_list
-    except Exception as e:
-        st.error(f"실시간 랭킹 백업 로딩 중 오류 발생: {e}")
-        return []
-
-# --- 고정된 수집 기간에 맞춘 날짜 계산 함수 ---
-def get_published_after(option):
+@st.cache_data(ttl=600)
+def fetch_engagement_trending_data(days, cc, fmt, cat_id):
+    url = "https://www.googleapis.com/youtube/v3/videos"
+    data = []
+    next_page_token = None
+    max_loops = 5 if fmt == "숏폼 전용" else 3
     now = datetime.now(timezone.utc)
-    if option == "1일": delta = timedelta(days=1)
-    elif option == "3일": delta = timedelta(days=3)
-    elif option == "15일": delta = timedelta(days=15)
-    elif option == "1달": delta = timedelta(days=30)
-    elif option == "3개월": delta = timedelta(days=90)
-    elif option == "6개월": delta = timedelta(days=180)
-    elif option == "1년": delta = timedelta(days=365)
-    elif option == "2년": delta = timedelta(days=365 * 2)
-    elif option == "3년": delta = timedelta(days=365 * 3)
-    elif option == "4년": delta = timedelta(days=365 * 4)
-    elif option == "5년": delta = timedelta(days=365 * 5)
-    else: return None
     
-    target_time = now - delta
-    return target_time.replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+    for _ in range(max_loops):
+        p = {"part": "id,snippet,contentDetails,statistics", "chart": "mostPopular", "regionCode": cc, "maxResults": 50, "key": API_KEY}
+        if cat_id: p["videoCategoryId"] = cat_id
+        if next_page_token: p["pageToken"] = next_page_token
+            
+        try: res = requests.get(url, params=p).json()
+        except: break
+        if "error" in res or "items" not in res: break
 
-def format_duration(seconds):
-    m, s = divmod(seconds, 60)
-    return f"{m}분 {s}초" if m > 0 else f"{s}초"
-
-def format_num(n):
-    n = int(n)
-    if n >= 100000000: return f"{n / 100000000:.1f}억"
-    if n >= 10000: return f"{n / 10000:.1f}만"
-    return f"{n:,}"
-
-
-# --- [세션 제어] 초기 앱 기동 시 DB 로드 ---
-if "raw_data" not in st.session_state or not st.session_state.raw_data:
-    st.session_state.raw_data = load_from_gsheet()
-
-
-# --- 사이드바 제어 패널 UI ---
-with st.sidebar:
-    st.title("🚀 Insight DB Dash")
-    st.caption("Streamlit v6.8 (달력 필터 제거)")
-    st.markdown("---")
-    
-    api_key = st.secrets.get("YOUTUBE_API_KEY", "")
-    if api_key and "gserviceaccount" in st.secrets:
-        st.success("✅ YouTube API & GSheet DB 연동 성공")
-    else:
-        st.error("⚠️ Secrets 환경 변수 세팅을 체크해 주세요.")
-        
-    st.markdown("---")
-    st.subheader("📊 DB 실시간 정밀 필터")
-    
-    # [요구사항 반영] 불필요한 업로드 시작일/종료일 달력 컴포넌트 전면 제거 완료
-    min_view = st.number_input("📉 최소 조회수 (0: 제한없음)", min_value=0, value=0, step=1000)
-    min_sub = st.number_input("👤 최소 구독자수 (0: 제한없음)", min_value=0, value=0, step=1000)
-    
-    media_type = st.radio("⏱️ 영상 형태 필터링", ["전체", "숏폼", "롱폼"], horizontal=True)
-
-    st.markdown("---")
-    st.subheader("📥 새로운 데이터 수집")
-    keyword = st.text_input("🔍 키워드 검색", placeholder="검색어 입력 (필수)")
-    
-    st.markdown("**📅 수집 기간 선택**")
-    duration_options = ["1일", "3일", "15일", "1달", "3개월", "6개월", "1년", "2년", "3년", "4년", "5년"]
-    date_option = st.radio("수집 기간 선택", duration_options, index=5, label_visibility="collapsed")
-    
-    st.markdown(" ")
-    region_dict = {"🌐 전체 국가": "", "🇰🇷 한국 (KR)": "KR", "🇺🇸 미국 (US)": "US", "🇯🇵 일본 (JP)": "JP"}
-    region_label = st.selectbox("🌍 대상 국가 타겟", list(region_dict.keys()), index=1)
-    region_code = region_dict[region_label]
-
-    st.markdown(" ")
-    search_triggered = st.button("🚀 신규 데이터 수집 및 DB 저장", use_container_width=True)
-
-
-# --- API 통신 및 데이터 스크래핑/적재 파트 ---
-if search_triggered:
-    if not keyword:
-        st.error("⚠️ 검색 키워드를 입력해 주세요.")
-    else:
-        with st.spinner("유튜브 데이터를 분석하여 구글 시트 DB에 기록 중입니다..."):
+        for item in res["items"]:
+            snippet = item.get("snippet", {})
+            stats = item.get("statistics", {})
+            v_id = item.get("id")
+            
+            try: secs = isodate.parse_duration(item["contentDetails"].get("duration", "PT0S")).total_seconds()
+            except: secs = 0
+            m_type = "Shorts" if secs <= 60 else "Long-form"
+            if (fmt == "롱폼 전용" and m_type != "Long-form") or (fmt == "숏폼 전용" and m_type != "Shorts"): continue
+            
+            published_at_str = snippet.get("publishedAt")
             try:
-                youtube = build("youtube", "v3", developerKey=api_key)
-                published_after = get_published_after(date_option)
-                
-                search_kwargs = {"part": "snippet", "q": keyword, "type": "video", "maxResults": 50}
-                if region_code: search_kwargs["regionCode"] = region_code
-                if published_after: search_kwargs["publishedAfter"] = published_after
-                
-                search_res = youtube.search().list(**search_kwargs).execute()
-                video_ids = [item["id"]["videoId"] for item in search_res.get("items", [])]
-                
-                if video_ids:
-                    video_res = youtube.videos().list(part="statistics,snippet,contentDetails", id=",".join(video_ids)).execute()
-                    channel_ids = list(set([item["snippet"]["channelId"] for item in video_res.get("items", [])]))
-                    channel_res = youtube.channels().list(part="statistics", id=",".join(channel_ids)).execute()
-                    channel_map = {c["id"]: int(c["statistics"].get("subscriberCount", 1)) for c in channel_res.get("items", [])}
-                    
-                    fetched_list = []
-                    for item in video_res.get("items", []):
-                        views = int(item["statistics"].get("viewCount", 0))
-                        subs = channel_map.get(item["snippet"]["channelId"], 1) or 1
-                        iso_duration = item["contentDetails"].get("duration", "PT0S")
-                        duration_sec = int(isodate.parse_duration(iso_duration).total_seconds())
-                        
-                        fetched_list.append({
-                            "id": item["id"], "title": item["snippet"]["title"], "channelTitle": item["snippet"]["channelTitle"],
-                            "publishedAt": item["snippet"]["publishedAt"], "thumb": item["snippet"]["thumbnails"]["high"]["url"],
-                            "viewCount": views, "subCount": subs, "duration": duration_sec, "viralScore": (views / subs) * 100
-                        })
-                    
-                    save_to_gsheet(fetched_list)
-                    st.session_state.raw_data = load_from_gsheet()
-                else:
-                    st.warning("일치하는 유튜브 검색 결과가 존재하지 않습니다.")
-            except Exception as e:
-                st.error(f"오류가 발생하였습니다: {e}")
-
-# --- 메인 뷰 대시보드 데이터 연산 및 렌더링 파트 ---
-st.title("📺 YouTube DB Insight Dashboard")
-
-if st.button("🔄 구글 시트 DB 동기화 / 데이터 정밀 분석"):
-    st.session_state.raw_data = load_from_gsheet()
-
-filtered_data = st.session_state.raw_data
-is_db_active = False
-
-# DB 데이터 렌더링 파트
-if filtered_data and isinstance(filtered_data, list) and "publishedAt" in filtered_data[0]:
-    df = pd.DataFrame(filtered_data)
-    
-    # 가독성을 위해 날짜 문자열을 데이트 타입으로 변환하여 칼럼 세팅
-    df['pub_date'] = pd.to_datetime(df['publishedAt']).dt.date
-    
-    # 최소 조회수 & 최소 구독자 정밀 필터링
-    df = df[df['viewCount'] >= min_view]
-    df = df[df['subCount'] >= min_sub]
-        
-    if media_type == "숏폼":
-        df = df[df['duration'] < 60]
-    elif media_type == "롱폼":
-        df = df[df['duration'] >= 60]
-
-    if not df.empty:
-        is_db_active = True
-        col_count, col_sort = st.columns([2, 3])
-        with col_sort:
-            sort_by = st.radio("정렬 필터", ["조회수 순", "🔥 떡상 성과순", "최신순"], horizontal=True)
+                published_at = datetime.strptime(published_at_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                elapsed_days = (now - published_at).days + (now - published_at).seconds / 86400.0
+                if elapsed_days < 0.1: elapsed_days = 0.1
+            except:
+                elapsed_days = 1.0
             
-        if sort_by == "조회수 순":
-            df = df.sort_values(by="viewCount", ascending=False)
-        elif "떡상" in sort_by:
-            df = df.sort_values(by="viralScore", ascending=False)
-        elif sort_by == "최신순":
-            df = df.sort_values(by="publishedAt", ascending=False)
-
-        with col_count:
-            st.subheader(f"🔍 DB 매칭 결과: {len(df)}개")
-
-        # 4열 그리드 출력
-        cols = st.columns(4)
-        for idx, row in enumerate(df.to_dict(orient="records")):
-            col = cols[idx % 4]
-            with col:
-                with st.container(border=True):
-                    st.image(row["thumb"], use_container_width=True)
-                    st.caption(f"📅 업로드: {row['pub_date']} | ⏱️ {format_duration(row['duration'])}")
-                    st.markdown(f"**[{row['title']}](https://youtube.com/watch?v={row['id']})**")
-                    st.caption(f"👤 {row['channelTitle']}")
-                    
-                    multiplier = float(row['viralScore']) / 100
-                    if row['viralScore'] >= 500:
-                        st.error(f"🔥 떡상급 성과 (x{multiplier:.1f})")
-                    else:
-                        st.info(f"📈 성과지수 (x{multiplier:.1f})")
-                    
-                    stat_col1, stat_col2 = st.columns(2)
-                    with stat_col1: st.metric(label="조회수", value=format_num(row['viewCount']))
-                    with stat_col2: st.metric(label="구독자", value=format_num(row['subCount']))
-
-# --- DB 공백 시 활성화되는 실시간 라이브 서치 파트 ---
-if not is_db_active:
-    if keyword:
-        st.warning(f"💡 현재 구글 시트 DB에 데이터가 없거나 필터 조건에 맞는 영상이 없습니다. 유튜브에서 직접 '{keyword}' 영상을 수집하여 조건 필터를 적용합니다.")
-        
-        with st.spinner("유튜브 랭킹 데이터 수집 중..."):
-            live_top_20 = fetch_top_20_live(api_key, keyword, region_code)
+            raw_likes = int(stats.get("likeCount", 0))
+            raw_comments = int(stats.get("commentCount", 0))
+            raw_views = int(stats.get("viewCount", 0))
             
-        if live_top_20:
-            live_df = pd.DataFrame(live_top_20)
-            live_df = live_df[live_df['viewCount'] >= min_view]
-            live_df = live_df[live_df['subCount'] >= min_sub]
+            calc_likes = int((raw_likes / elapsed_days) * days)
+            calc_comments = int((raw_comments / elapsed_days) * days)
+            calc_views = int((raw_views / elapsed_days) * days)
+            engagement_score = calc_likes + (calc_comments * 2) 
             
-            if not live_df.empty:
-                st.subheader(f"🔥 조건 매칭 실시간 유튜브 랭킹 리스트 ({len(live_df)}개 표시)")
-                cols = st.columns(4)
-                for idx, item in enumerate(live_df.to_dict(orient="records")):
-                    col = cols[idx % 4]
-                    with col:
-                        with st.container(border=True):
-                            st.image(item["thumb"], use_container_width=True)
-                            st.caption(f"⏱️ 영상 길이: {format_duration(item['duration'])}")
-                            st.markdown(f"**[{item['title']}](https://youtube.com/watch?v={item['id']})**")
-                            st.caption(f"👤 {item['channelTitle']}")
-                            
-                            multiplier = item['viralScore'] / 100
-                            if item['viralScore'] >= 500:
-                                st.error(f"🔥 떡상 성과 (x{multiplier:.1f})")
-                            else:
-                                st.info(f"📈 성과지수 (x{multiplier:.1f})")
-                            
-                            stat_col1, stat_col2 = st.columns(2)
-                            with stat_col1: st.metric(label="조회수", value=format_num(item['viewCount']))
-                            with stat_col2: st.metric(label="구독자", value=format_num(item['subCount']))
-            else:
-                st.warning("⚠️ 실시간 수집된 데이터 중 설정하신 '최소 조회수' 또는 '최소 구독자수' 조건을 충족하는 영상이 없습니다. 사이드바 수치를 낮춰보세요.")
-        else:
-            st.info("검색된 실시간 영상이 없습니다. 키워드를 올바르게 입력해 주세요.")
-    else:
-        st.info("📥 대시보드 활성화를 위해 왼쪽 사이드바 하단 '새로운 데이터 수집' 란에 키워드를 입력하고 검색을 시도해 주세요.")
+            if m_type == "Shorts": rpm = 110 if cc == "KR" else 150 if cc == "US" else 120
+            else: rpm = 4500 if cc == "KR" else 9000 if cc == "US" else 5500
+                
+            estimated_revenue = int((calc_views / 1000) * rpm)
+            currency_symbol = "₩" if cc == "KR" else "$" if cc == "US" else "¥"
+            
+            data.append({
+                "video_url": f"https://youtu.be/{v_id}",
+                "name": snippet.get("channelTitle", "익명"),
+                "handle": f"@{snippet.get('channelId')[:12]}",
+                "type": m_type, "likes": calc_likes, "comments": calc_comments,
+                "score": engagement_score, "rev": estimated_revenue, "symbol": currency_symbol,
+                "img": snippet.get("thumbnails", {}).get("high", {}).get("url", "")
+            })
+            
+        next_page_token = res.get("nextPageToken")
+        if not next_page_token: break
+
+    df = pd.DataFrame(data)
+    if df.empty: return df
+    df = df.drop_duplicates(subset=

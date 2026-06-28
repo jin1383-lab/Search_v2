@@ -98,3 +98,132 @@ def fetch_engagement_trending_data(days, cc, fmt, cat_id):
                 elapsed_days = (now - published_at).days + (now - published_at).seconds / 86400.0
                 if elapsed_days < 0.1: elapsed_days = 0.1
             except:
+                elapsed_days = 1.0
+            
+            raw_likes = int(stats.get("likeCount", 0))
+            raw_comments = int(stats.get("commentCount", 0))
+            raw_views = int(stats.get("viewCount", 0))
+            
+            calc_likes = int((raw_likes / elapsed_days) * days)
+            calc_comments = int((raw_comments / elapsed_days) * days)
+            calc_views = int((raw_views / elapsed_days) * days)
+            engagement_score = calc_likes + (calc_comments * 2) 
+            
+            if m_type == "Shorts": rpm = 110 if cc == "KR" else 150 if cc == "US" else 120
+            else: rpm = 4500 if cc == "KR" else 9000 if cc == "US" else 5500
+                
+            estimated_revenue = int((calc_views / 1000) * rpm)
+            currency_symbol = "₩" if cc == "KR" else "$" if cc == "US" else "¥"
+            
+            data.append({
+                "video_url": f"https://youtu.be/{v_id}",
+                "name": snippet.get("channelTitle", "익명"),
+                "handle": f"@{snippet.get('channelId')[:12]}",
+                "type": m_type, "likes": calc_likes, "comments": calc_comments,
+                "score": engagement_score, "rev": estimated_revenue, "symbol": currency_symbol,
+                "img": snippet.get("thumbnails", {}).get("high", {}).get("url", "")
+            })
+            
+        next_page_token = res.get("nextPageToken")
+        if not next_page_token: break
+
+    df = pd.DataFrame(data)
+    if df.empty: return df
+    
+    # 🎯 괄호 오류 완벽 수정 완료 파트
+    df = df.drop_duplicates(subset=["handle"]).sort_values(by="score", ascending=False).reset_index(drop=True)
+    return df.head(20)
+
+# 🛠️ 사이드바 컨트롤 매트릭스 패널 (모바일 최적화 레이아웃)
+st.sidebar.markdown("### 🗄️ DATABASE CONTROL")
+db_view = st.sidebar.checkbox("📂 구글 시트 백업 DB 조회하기")
+
+st.sidebar.markdown("### 📌 FILTER CONFIG")
+CATEGORY_MAP = {
+    "전체 (All)": None, "영화 & 애니메이션": "1", "자동차 & 탈것": "2", "음악": "10", 
+    "반려동물 & 동물": "15", "스포츠": "17", "여행 & 이벤트": "19", "게임": "20", 
+    "인물 & 블로그": "22", "코미디": "23", "엔터테인먼트": "24", "뉴스 & 정치": "25", 
+    "노하우 & 스타일": "26", "교육": "27", "과학 & 기술": "28"
+}
+
+# 🎯 자판 차단 치트키: 무조건 터치 기반 전용 radio 형태로 감싸서 로드
+with st.sidebar.expander("📺 카테고리 선택 (터치 전용)", expanded=False):
+    selected_cat_label = st.radio(
+        "CATEGORY_SELECTION",
+        options=list(CATEGORY_MAP.keys()),
+        label_visibility="collapsed"
+    )
+target_cat_id = CATEGORY_MAP[selected_cat_label]
+
+# 가로 배치 버튼형 미디어 포맷 필터
+media_filter = st.sidebar.radio("FORMAT", ["전체 통합", "롱폼 전용", "숏폼 전용"], horizontal=True)
+
+# 1일에서 최대 5년(1825일) 롱레인지 슬라이더 타임라인 스케일러
+period_label = st.sidebar.select_slider(
+    "PERIOD SCALE", 
+    options=["1D", "7D", "30D", "90D", "180D", "1 Year", "3 Years", "5 Years"]
+)
+day_mapping = {"1D": 1, "7D": 7, "30D": 30, "90D": 90, "180D": 180, "1 Year": 365, "3 Years": 1095, "5 Years": 1825}
+days_param = day_mapping[period_label]
+
+nations = ["South Korea (KR)", "United States (US)", "Japan (JP)"]
+selected_nation = st.sidebar.radio("NATION", nations, horizontal=True) # 국가 탭도 키보드 방지를 위해 라디오로 교체
+country_code = "US" if "US" in selected_nation else "JP" if "JP" in selected_nation else "KR"
+
+st.sidebar.markdown("<br>", unsafe_allow_html=True)
+run_engine = st.sidebar.button("RUN & SYNC CLOUD SHEET", type="primary", use_container_width=True)
+
+if db_view:
+    st.markdown("### 🗄️ Google Sheets DB Cumulative History")
+    try:
+        sheet_data = worksheet.get_all_records()
+        if sheet_data:
+            db_df = pd.DataFrame(sheet_data)
+            st.dataframe(db_df.tail(100), use_container_width=True)
+            st.info(f"💡 현재 구글 시트에 총 {len(db_df)}개의 누적 트렌드 시계열 로그가 보관 중입니다.")
+        else:
+            st.warning("시트에 데이터 로그가 존재하지 않습니다.")
+    except Exception as e:
+        st.error(f"구글 시트 로드 에러: {e}")
+
+if run_engine:
+    with st.spinner(f"⚡ {country_code} ({selected_cat_label}) - {period_label} 타겟 환산 연산 중..."): 
+        df = fetch_engagement_trending_data(days_param, country_code, media_filter, target_cat_id)
+        
+    if not df.empty:
+        sheet_sync_success = save_data_to_google_sheet(df, period_label, selected_cat_label)
+        if sheet_sync_success:
+            st.markdown(f'<div class="url-wrapper">✅ CLOUD SHEET SYNC SUCCESS | 카테고리 [{selected_cat_label}] 기준 {period_label} 데이터가 실시간 누적되었습니다.</div>', unsafe_allow_html=True)
+        
+        m = df.iloc[0]
+        c = "color:#F87171;" if m['type'] == "Shorts" else "color:#60A5FA;"
+        st.markdown(f"""<div class="mvp-hero-card"><div style="display:flex;justify-content:space-between;font-size:9pt;font-weight:600;"><span style="color:#FF0055;">🔥 {period_label} {selected_cat_label} NO.1</span><span style="{c}">{m['type']}</span></div><div style="display:flex;align-items:center;gap:15px;margin-top:10px;"><a href="{m['video_url']}" target="_blank" class="thumb-link"><img src="{m['img']}" style="width:100px;height:70px;border-radius:6px;object-fit:cover;"></a><div style="flex-grow:1;"><div style="font-size:14pt;font-weight:800;color:#FFF;">{m['name']}</div><div style="color:#9CA3AF;font-size:9pt;">{m['handle']}</div></div><div><div class="metric-box"><span style="color:#F87171;">❤️ 환산 좋아요:</span> <b>{m['likes']:,}개</b></div><div class="metric-box"><span style="color:#38BDF8;">💬 환산 댓글수:</span> <b>{m['comments']:,}개</b></div></div></div></div>""", unsafe_allow_html=True)
+        
+        st.markdown(f"<h5 style='font-weight:700;color:#E5E7EB;margin-bottom:15px;'>👥 TOP 2 - 20 REACTION LEADERS</h5>", unsafe_allow_html=True)
+        g_data = df.iloc[1:].reset_index(drop=True)
+        total_rows = (len(g_data) + 2) // 3
+        grid_rows = [st.columns(3) for _ in range(total_rows)]
+        
+        for idx in range(len(g_data)):
+            row_pos = idx // 3
+            col_pos = idx % 3
+            item = g_data.iloc[idx]
+            tc = "color:#F87171;" if item['type'] == "Shorts" else "color:#60A5FA;"
+            
+            with grid_rows[row_pos][col_pos]:
+                st.markdown(f"""<div class="grid-card">
+                    <div>
+                        <div style="display:flex;justify-content:space-between;font-size:8pt;"><b>TOP {idx+2}</b><span style="{tc}">{item['type']}</span></div>
+                        <a href="{item['video_url']}" target="_blank" class="thumb-link">
+                            <img src="{item['img']}" style="width:100%;height:120px;border-radius:6px;object-fit:cover;margin:8px 0;border:1px solid #24314D;">
+                        </a>
+                        <div style="font-size:10.5pt;font-weight:700;color:#FFF;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{item['name']}</div>
+                        <div style="color:#9CA3AF;font-size:8.5pt;margin-bottom:8px;">{item['handle']}</div>
+                    </div>
+                    <div>
+                        <div class="metric-box"><span style="color:#F87171;">❤️ 좋아요:</span> <b>{item['likes']:,}</b></div>
+                        <div class="metric-box"><span style="color:#38BDF8;">💬 댓글수:</span> <b>{item['comments']:,}</b></div>
+                    </div>
+                </div>""", unsafe_allow_html=True)
+    else:
+        st.warning("조건에 맞는 트렌딩 연산 데이터를 확보하지 못했습니다.")

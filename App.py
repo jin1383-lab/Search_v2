@@ -98,35 +98,3 @@ def fetch_engagement_trending_data(days, cc, fmt, cat_id):
                 elapsed_days = (now - published_at).days + (now - published_at).seconds / 86400.0
                 if elapsed_days < 0.1: elapsed_days = 0.1
             except:
-                elapsed_days = 1.0
-            
-            raw_likes = int(stats.get("likeCount", 0))
-            raw_comments = int(stats.get("commentCount", 0))
-            raw_views = int(stats.get("viewCount", 0))
-            
-            calc_likes = int((raw_likes / elapsed_days) * days)
-            calc_comments = int((raw_comments / elapsed_days) * days)
-            calc_views = int((raw_views / elapsed_days) * days)
-            engagement_score = calc_likes + (calc_comments * 2) 
-            
-            if m_type == "Shorts": rpm = 110 if cc == "KR" else 150 if cc == "US" else 120
-            else: rpm = 4500 if cc == "KR" else 9000 if cc == "US" else 5500
-                
-            estimated_revenue = int((calc_views / 1000) * rpm)
-            currency_symbol = "₩" if cc == "KR" else "$" if cc == "US" else "¥"
-            
-            data.append({
-                "video_url": f"https://youtu.be/{v_id}",
-                "name": snippet.get("channelTitle", "익명"),
-                "handle": f"@{snippet.get('channelId')[:12]}",
-                "type": m_type, "likes": calc_likes, "comments": calc_comments,
-                "score": engagement_score, "rev": estimated_revenue, "symbol": currency_symbol,
-                "img": snippet.get("thumbnails", {}).get("high", {}).get("url", "")
-            })
-            
-        next_page_token = res.get("nextPageToken")
-        if not next_page_token: break
-
-    df = pd.DataFrame(data)
-    if df.empty: return df
-    df = df.drop_duplicates(subset=

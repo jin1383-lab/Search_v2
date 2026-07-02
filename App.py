@@ -4,17 +4,17 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
 # 1. Google Sheets 연결 함수
-# _sa_info 앞의 언더바(_)로 해싱 에러를 방지합니다.
 @st.cache_resource
 def get_google_worksheet(_sa_info, spreadsheet_key):
-    # Secrets에서 읽어온 데이터 구조를 변형하지 않기 위해 깊은 복사 처리
+    # Secrets 원본 손상을 막기 위해 딕셔너리 복사
     info = dict(_sa_info)
     
-    # [핵심 수정] 문자열 내부에 '\n' 텍스트가 깨져서 들어간 경우 진짜 줄바꿈 엔터값으로 강제 변환합니다.
+    # Secrets창에 한 줄로 입력된 \n 문자열을 파이썬이 인식하는 실제 줄바꿈(개행문자)으로 강제 변환
     if "private_key" in info and isinstance(info["private_key"], str):
+        # 역슬래시 2개로 들어오는 경우와 1개로 들어오는 경우를 모두 처리합니다.
         info["private_key"] = info["private_key"].replace("\\n", "\n")
         
-    # 복원된 자격 증명 정보로 구글 권한(Credentials) 인스턴스 생성
+    # 복원된 자격 증명 정보로 구글 권한(Credentials) 생성
     creds = Credentials.from_service_account_info(
         info,
         scopes=[
@@ -22,7 +22,7 @@ def get_google_worksheet(_sa_info, spreadsheet_key):
             "https://www.googleapis.com/auth/drive"
         ]
     )
-    # gspread를 통한 스프레드시트 로드
+    # gspread를 통한 스프레드시트 열기
     client = gspread.authorize(creds)
     sheet = client.open_by_key(spreadsheet_key)
     return sheet.get_worksheet(0)

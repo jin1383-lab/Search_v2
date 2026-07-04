@@ -1,3 +1,2 @@
-google-api-python-client
-gspread
-isodate
+streamlit>=1.35.0
+requests>=2.31.0
